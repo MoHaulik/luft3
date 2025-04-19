@@ -1,3 +1,10 @@
+Here’s the updated version of your app. I’ve:
+
+- Renamed “Natural Breathing” to “Deep Breathing” in the UI.
+- Changed the cycle so it’s now 6 sec inhale + 6 sec exhale (i.e. a 12 sec cycle).
+- Adjusted the total deep‑breathing duration to 30 cycles × 12 sec = 360 sec (6 min).
+
+```html
 <!DOCTYPE html>
 <html>
 <head>
@@ -86,27 +93,27 @@
     let particles, particleMaterial;
     let breathSphere, glowMaterial;
     let clock = new THREE.Clock();
+    let basePositions = [];
     let lastIntensity = 0;
 
     // Breathing session variables
     let phase = "breathing";
     let phaseStartTime = 0;
-    const deepBreathingDuration = 30 * 6;    // total Deep Breathing phase: 180s
-    const inhaleDuration = 6;               // 6s inhale
-    const exhaleDuration = 6;               // 6s exhale
-    const breathCycleDuration = inhaleDuration + exhaleDuration; // 12s per cycle
-    const inhaleFraction = inhaleDuration / breathCycleDuration; // 0.5
-    const holdDuration = 60;                // 60s hold
-    const recoveryDuration = 15;            // 15s recovery
+    const breathCycleDuration = 12;              // 6 sec inhale + 6 sec exhale
+    const deepBreathingDuration = 30 * 12;       // 30 cycles × 12 sec = 360 sec total
+    const holdDuration = 60;
+    const recoveryDuration = 15;
     let cycleCount = 0;
     const maxCycles = 3;
 
+    // Audio objects
     let inhaleAudio, exhaleAudio, ambientAudio;
     let lastBreathStage = null;
 
+    // Particle system settings
     const particleCount = 1500;
     const particleRadius = 5;
-    const particleSystem = {
+    let particleSystem = {
       hueRange: [190, 260],
       baseSaturation: 0.7,
       baseSize: 0.3,
@@ -126,28 +133,31 @@
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       document.body.appendChild(renderer.domElement);
 
+      // Lighting
       const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
       scene.add(ambientLight);
 
-      const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-      dirLight.position.set(1,1,1);
-      dirLight.castShadow = true;
-      scene.add(dirLight);
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+      directionalLight.position.set(1, 1, 1);
+      directionalLight.castShadow = true;
+      scene.add(directionalLight);
 
       document.getElementById('start-button').addEventListener('click', () => {
         if (navigator.xr) {
           navigator.xr.isSessionSupported('immersive-ar').then(supported => {
             if (supported) {
-              const sessionInit = {
-                optionalFeatures: ['dom-overlay','light-estimation'],
-                domOverlay: { root: document.body }
+              const sessionInit = { 
+                optionalFeatures: ['dom-overlay', 'light-estimation'], 
+                domOverlay: { root: document.body } 
               };
               navigator.xr.requestSession('immersive-ar', sessionInit).then(onSessionStarted);
             } else {
-              alert('AR not supported');
+              alert('WebXR AR session is not supported on this device.');
             }
           });
-        } else alert('WebXR not supported');
+        } else {
+          alert('WebXR is not supported in this browser.');
+        }
       });
     }
 
@@ -163,234 +173,285 @@
 
       inhaleAudio = new Audio('inhale.mp3');
       exhaleAudio = new Audio('exhale.mp3');
+      
       ambientAudio = new Audio('https://soundbible.com/mp3/ocean-waves-daniel_simon.mp3');
       ambientAudio.loop = true;
       ambientAudio.volume = 0.3;
       ambientAudio.play();
 
-      navigator.mediaDevices.getUserMedia({audio:true,video:false})
-        .then(stream => {
-          const ctx = new (window.AudioContext||window.webkitAudioContext)();
-          const src = ctx.createMediaStreamSource(stream);
-          analyser = ctx.createAnalyser();
-          analyser.fftSize = 256;
-          analyser.smoothingTimeConstant = 0.6;
-          dataArray = new Uint8Array(analyser.frequencyBinCount);
-          src.connect(analyser);
-        });
-
       renderer.setAnimationLoop(render);
+
+      navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(stream => {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(stream);
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.6;
+        const bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+        source.connect(analyser);
+      });
+
       createParticles();
       createBreathingSphere();
     }
 
     function createBreathingSphere() {
-      const geom = new THREE.SphereGeometry(0.5,32,32);
-      const mat = new THREE.MeshPhongMaterial({
-        color: 0x4876FF, transparent:true, opacity:0.6, shininess:100
+      const geometry = new THREE.SphereGeometry(0.5, 32, 32);
+      const material = new THREE.MeshPhongMaterial({
+        color: 0x4876FF,
+        transparent: true,
+        opacity: 0.6,
+        shininess: 100
       });
-      breathSphere = new THREE.Mesh(geom, mat);
-      breathSphere.position.set(0,0,-3);
+      breathSphere = new THREE.Mesh(geometry, material);
+      breathSphere.position.set(0, 0, -3);
       scene.add(breathSphere);
-
-      const glowGeo = new THREE.SphereGeometry(0.55,32,32);
+      
+      const glowGeometry = new THREE.SphereGeometry(0.55, 32, 32);
       glowMaterial = new THREE.ShaderMaterial({
-        uniforms:{
-          c:{value:0.5}, p:{value:3.0},
-          glowColor:{value:new THREE.Color(0x00a1ff)},
-          viewVector:{value:camera.position}
+        uniforms: {
+          "c": { type: "f", value: 0.5 },
+          "p": { type: "f", value: 3.0 },
+          glowColor: { type: "c", value: new THREE.Color(0x00a1ff) },
+          viewVector: { type: "v3", value: camera.position }
         },
-        vertexShader:`
-          uniform vec3 viewVector; uniform float c; uniform float p;
+        vertexShader: `
+          uniform vec3 viewVector;
+          uniform float c;
+          uniform float p;
           varying float intensity;
-          void main(){
-            vec3 n = normalize(normal);
-            vec3 v = normalize(viewVector);
-            intensity = pow(c - dot(n,v), p);
-            gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0);
+          void main() {
+            vec3 vNormal = normalize(normal);
+            vec3 vNormel = normalize(viewVector);
+            intensity = pow(c - dot(vNormal, vNormel), p);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
           }
         `,
-        fragmentShader:`
-          uniform vec3 glowColor; varying float intensity;
-          void main(){
-            gl_FragColor = vec4(glowColor * intensity, 1.0);
+        fragmentShader: `
+          uniform vec3 glowColor;
+          varying float intensity;
+          void main() {
+            vec3 glow = glowColor * intensity;
+            gl_FragColor = vec4(glow, 1.0);
           }
         `,
-        side:THREE.BackSide, blending:THREE.AdditiveBlending, transparent:true
+        side: THREE.BackSide,
+        blending: THREE.AdditiveBlending,
+        transparent: true
       });
-      const glowMesh = new THREE.Mesh(glowGeo, glowMaterial);
-      glowMesh.position.copy(breathSphere.position);
+      
+      const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
+      glowMesh.position.set(0, 0, -3);
       scene.add(glowMesh);
     }
 
-    function createParticles(){
-      const geo = new THREE.BufferGeometry();
-      const pos=[], col=[], sz=[], al=[], turb=[], mult=[];
+    function createParticles() {
+      const geometry = new THREE.BufferGeometry();
+      const positions = [], colors = [], sizes = [], alphas = [], turbulence = [], sizeMultipliers = [];
 
-      for(let i=0;i<particleCount;i++){
-        const θ = Math.random()*Math.PI*2;
-        const φ = Math.acos(2*Math.random()-1);
-        const r = Math.pow(Math.random(),0.7)*particleRadius;
-        const x = r*Math.sin(φ)*Math.cos(θ),
-              y = r*Math.sin(φ)*Math.sin(θ),
-              z = r*Math.cos(φ)*0.7;
-        pos.push(x,y,z);
-        let c = new THREE.Color();
-        const h = particleSystem.hueRange[0]+Math.random()*(particleSystem.hueRange[1]-particleSystem.hueRange[0]);
-        c.setHSL(h/360, particleSystem.baseSaturation+Math.random()*0.3,0.5+Math.random()*0.5);
-        col.push(c.r,c.g,c.b);
-        sz.push(particleSystem.baseSize*(0.5+Math.random()));
-        mult.push(0.8+Math.random()*1.5);
-        al.push(0.2+Math.random()*0.8);
-        turb.push(Math.random()*2);
+      for (let i = 0; i < particleCount; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const radius = Math.pow(Math.random(), 0.7) * particleRadius;
+        const x = radius * Math.sin(phi) * Math.cos(theta);
+        const y = radius * Math.sin(phi) * Math.sin(theta);
+        const z = radius * Math.cos(phi) * 0.7;
+        positions.push(x, y, z);
+        basePositions.push(z);
+
+        const color = new THREE.Color();
+        const hue = particleSystem.hueRange[0] + Math.random() * (particleSystem.hueRange[1] - particleSystem.hueRange[0]);
+        color.setHSL(hue/360, particleSystem.baseSaturation + Math.random()*0.3, 0.5 + Math.random()*0.5);
+        colors.push(color.r, color.g, color.b);
+
+        sizes.push(particleSystem.baseSize * (0.5 + Math.random()));
+        sizeMultipliers.push(0.8 + Math.random() * 1.5);
+        alphas.push(0.2 + Math.random() * 0.8);
+        turbulence.push(Math.random() * 2);
       }
 
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
-      geo.setAttribute('customColor', new THREE.Float32BufferAttribute(col,3));
-      geo.setAttribute('size', new THREE.Float32BufferAttribute(sz,1));
-      geo.setAttribute('sizeMultiplier', new THREE.Float32BufferAttribute(mult,1));
-      geo.setAttribute('alpha', new THREE.Float32BufferAttribute(al,1));
-      geo.setAttribute('turbulence', new THREE.Float32BufferAttribute(turb,1));
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('customColor', new THREE.Float32BufferAttribute(colors, 3));
+      geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+      geometry.setAttribute('alpha', new THREE.Float32BufferAttribute(alphas, 1));
+      geometry.setAttribute('turbulence', new THREE.Float32BufferAttribute(turbulence, 1));
+      geometry.setAttribute('sizeMultiplier', new THREE.Float32BufferAttribute(sizeMultipliers, 1));
 
       particleMaterial = new THREE.ShaderMaterial({
-        uniforms:{
-          pointTexture:{ value:new THREE.TextureLoader().load('https://threejs.org/examples/textures/sprites/spark1.png') },
-          time:{value:0}, breathFactor:{value:0}, intensityFactor:{value:0}
+        uniforms: {
+          pointTexture: { value: new THREE.TextureLoader().load('https://threejs.org/examples/textures/sprites/spark1.png') },
+          time: { value: 0 },
+          breathFactor: { value: 0 },
+          intensityFactor: { value: 0 },
         },
-        vertexShader:`
-          attribute float size, alpha, turbulence, sizeMultiplier;
+        vertexShader: `
+          attribute float size;
           attribute vec3 customColor;
+          attribute float alpha;
+          attribute float turbulence;
+          attribute float sizeMultiplier;
           varying vec3 vColor;
           varying float vAlpha;
-          uniform float time, breathFactor, intensityFactor;
-          void main(){
+          uniform float time;
+          uniform float breathFactor;
+          uniform float intensityFactor;
+          
+          void main() {
             vColor = customColor;
-            vec3 p = position;
-            float d = length(position.xy);
-            float bf = breathFactor*(1.0-d/5.0)*1.5;
-            p.z += bf;
-            p.x += position.x*bf*0.2;
-            p.y += position.y*bf*0.2;
-            float tAmt = turbulence*0.3;
-            p.x += sin(time*(0.5+turbulence)+position.z*2.0)*tAmt;
-            p.y += cos(time*(0.7+turbulence)+position.x*2.0)*tAmt;
-            p.z += sin(time*(0.9+turbulence)+position.y*2.0)*tAmt*0.5;
-            if(d<3.0){
-              p.z += intensityFactor*sin(time*2.0+d*3.0)*(3.0-d)*0.3;
+            vec3 pos = position;
+            float dist = length(position.xy);
+            float breathEffect = breathFactor * (1.0 - dist/5.0) * 1.5;
+            pos.z += breathEffect;
+            pos.x += position.x * breathFactor * 0.2;
+            pos.y += position.y * breathFactor * 0.2;
+            
+            float turbAmt = turbulence * 0.3;
+            pos.x += sin(time * (0.5 + turbulence) + position.z * 2.0) * turbAmt;
+            pos.y += cos(time * (0.7 + turbulence) + position.x * 2.0) * turbAmt;
+            pos.z += sin(time * (0.9 + turbulence) + position.y * 2.0) * turbAmt * 0.5;
+
+            if(dist < 3.0) {
+              pos.z += intensityFactor * sin(time*2.0 + dist*3.0) * (3.0-dist) * 0.3;
             }
-            vAlpha = alpha*(1.0-length(position)/5.0)*(0.6+0.4*intensityFactor);
-            float szBoost = 1.0+intensityFactor*3.0*sizeMultiplier;
-            float dynSize = size*szBoost;
-            vec4 mv = modelViewMatrix*vec4(p,1.0);
-            gl_PointSize = dynSize*(300.0/ -mv.z);
-            gl_Position = projectionMatrix*mv;
+
+            vAlpha = alpha * (1.0 - length(position)/5.0) * (0.6 + 0.4 * intensityFactor);
+            float sizeBoost = 1.0 + intensityFactor * 3.0 * sizeMultiplier;
+            float dynamicSize = size * sizeBoost;
+
+            vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+            gl_PointSize = dynamicSize * (300.0 / -mvPosition.z);
+            gl_Position = projectionMatrix * mvPosition;
           }
         `,
-        fragmentShader:`
+        fragmentShader: `
           uniform sampler2D pointTexture;
           varying vec3 vColor;
           varying float vAlpha;
-          void main(){
-            vec4 tex = texture2D(pointTexture, gl_PointCoord);
-            gl_FragColor = vec4(vColor, vAlpha*tex.a);
-            if(gl_FragColor.a<0.05) discard;
+          void main() {
+            vec4 texColor = texture2D(pointTexture, gl_PointCoord);
+            gl_FragColor = vec4(vColor, vAlpha * texColor.a);
+            if (gl_FragColor.a < 0.05) discard;
           }
         `,
-        transparent:true, blending:THREE.AdditiveBlending, depthWrite:false
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
       });
 
-      particles = new THREE.Points(geo, particleMaterial);
-      particles.position.set(0,0,-3);
+      particles = new THREE.Points(geometry, particleMaterial);
+      particles.position.set(0, 0, -3);
       scene.add(particles);
     }
 
-    function updateParticles(bf, intensity){
-      lastIntensity = lastIntensity*0.7 + intensity*0.3;
+    function updateParticles(breathOffset, intensity) {
+      lastIntensity = lastIntensity * 0.7 + intensity * 0.3;
       particleMaterial.uniforms.time.value = clock.getElapsedTime();
-      particleMaterial.uniforms.breathFactor.value = bf;
+      particleMaterial.uniforms.breathFactor.value = breathOffset;
       particleMaterial.uniforms.intensityFactor.value = lastIntensity;
     }
 
-    function render(){
-      const dt = clock.getDelta();
-      const t  = clock.getElapsedTime();
+    function render() {
+      const delta = clock.getDelta();
+      const currentTime = clock.getElapsedTime();
       let intensity = 0;
-      if(analyser){
+
+      if (analyser) {
         analyser.getByteFrequencyData(dataArray);
-        let sum=0,count=0;
-        for(let i=2;i<20;i++){ sum += dataArray[i]*1.5; count++; }
-        intensity = Math.min(1.0,(sum/count)/128);
-        intensity = Math.pow(intensity,0.7);
+        let relevant = 0, total = 0;
+        for (let i = 2; i < 20; i++) {
+          relevant += dataArray[i] * 1.5;
+          total++;
+        }
+        intensity = Math.min(1.0, (relevant/total)/128);
+        intensity = Math.pow(intensity, 0.7);
       }
 
-      let statusText = "", bf=0, progress=0;
-      if(phase==="breathing"){
-        const e = t - phaseStartTime;
-        if(e >= deepBreathingDuration){
-          phase="hold"; phaseStartTime = t;
+      let statusText = "";
+      let breathOffset = 0;
+      let breathProgress = 0;
+
+      if (phase === "breathing") {
+        const elapsed = currentTime - phaseStartTime;
+        if (elapsed >= deepBreathingDuration) {
+          phase = "hold";
+          phaseStartTime = currentTime;
         } else {
-          const cycleEl = e % breathCycleDuration;
-          progress = cycleEl / breathCycleDuration;
-          const stage = (progress < inhaleFraction) ? "inhale" : "exhale";
-          if(stage !== lastBreathStage){
-            lastBreathStage = stage;
-            (stage==="inhale" ? inhaleAudio : exhaleAudio).play();
+          breathProgress = (elapsed % breathCycleDuration) / breathCycleDuration;
+          const currentStage = (breathProgress < 0.5) ? "inhale" : "exhale";
+
+          if (currentStage !== lastBreathStage) {
+            lastBreathStage = currentStage;
+            if (currentStage === "inhale") inhaleAudio.play();
+            else exhaleAudio.play();
           }
-          bf = (0.7 + intensity*0.5) * Math.sin(2*Math.PI*(progress-0.25));
-          updateParticles(bf, intensity);
-          const scale = 0.5 + 0.4*(1+bf);
-          breathSphere.scale.set(scale, scale, scale);
-          glowMaterial.uniforms.glowColor.value.setHex(stage==="inhale" ? 0x00a1ff : 0x4876ff);
-          const remMin = Math.floor((deepBreathingDuration - e)/60);
-          const remSec = Math.floor((deepBreathingDuration - e)%60);
-          statusText = `Phase: Deep Breathing<br>Remaining: ${remMin}:${remSec<10?'0':''}${remSec}`;
-        }
 
-      } else if(phase==="hold"){
-        const e = t - phaseStartTime;
-        if(e >= holdDuration){
-          phase="recovery"; phaseStartTime = t;
+          breathOffset = (0.7 + intensity * 0.5) * Math.sin(2 * Math.PI * (breathProgress - 0.25));
+          updateParticles(breathOffset, intensity);
+
+          const sphereScale = 0.5 + 0.4 * (1 + breathOffset);
+          breathSphere.scale.set(sphereScale, sphereScale, sphereScale);
+
+          glowMaterial.uniforms.glowColor.value.setHex(
+            currentStage === "inhale" ? 0x00a1ff : 0x4876ff
+          );
+
+          const minsRem = Math.floor((deepBreathingDuration - elapsed) / 60);
+          const secsRem = Math.floor((deepBreathingDuration - elapsed) % 60);
+          statusText = `Phase: Deep Breathing<br>Remaining: ${minsRem}:${secsRem < 10 ? '0' : ''}${secsRem}`;
         }
-        bf = (0.2 + intensity*0.2)*Math.sin(2*Math.PI*(e/60));
-        updateParticles(bf, intensity*0.8);
-        const pulse = 0.2 + 0.05*Math.sin(e*0.5) + intensity*0.1;
-        breathSphere.scale.set(pulse, pulse, pulse);
+      } else if (phase === "hold") {
+        const elapsed = currentTime - phaseStartTime;
+        if (elapsed >= holdDuration) {
+          phase = "recovery";
+          phaseStartTime = currentTime;
+        }
+        breathOffset = (0.2 + intensity * 0.2) * Math.sin(2 * Math.PI * (elapsed / 60));
+        updateParticles(breathOffset, intensity * 0.8);
+
+        const holdPulse = 0.2 + 0.05 * Math.sin(elapsed * 0.5) + intensity * 0.1;
+        breathSphere.scale.set(holdPulse, holdPulse, holdPulse);
         glowMaterial.uniforms.glowColor.value.setHex(0x8a2be2);
-        progress = e/holdDuration;
-        statusText = `Phase: Breath Hold<br>Remaining: ${Math.floor(holdDuration - e)}s`;
 
-      } else if(phase==="recovery"){
-        const e = t - phaseStartTime;
-        if(e >= recoveryDuration){
+        breathProgress = elapsed / holdDuration;
+        const secRem = Math.floor(holdDuration - elapsed);
+        statusText = `Phase: Breath Hold<br>Remaining: ${secRem}s`;
+      } else if (phase === "recovery") {
+        const elapsed = currentTime - phaseStartTime;
+        if (elapsed >= recoveryDuration) {
           cycleCount++;
-          if(cycleCount < maxCycles){
-            phase="breathing"; phaseStartTime = t;
+          if (cycleCount < maxCycles) {
+            phase = "breathing";
+            phaseStartTime = currentTime;
           } else {
             renderer.setAnimationLoop(null);
-            document.getElementById('status').innerHTML = "Session Finished!<br>Thank you!";
-            document.getElementById('breath-indicator').style.display='none';
-            const fade = setInterval(()=>{
-              if(ambientAudio.volume > 0.05) ambientAudio.volume -= 0.05;
-              else { ambientAudio.pause(); clearInterval(fade); }
-            },200);
+            document.getElementById('status').innerHTML = "Session Finished!<br>Thank you for participating.";
+            document.getElementById('breath-indicator').style.display = 'none';
+            const fadeOut = setInterval(() => {
+              if (ambientAudio.volume > 0.05) ambientAudio.volume -= 0.05;
+              else { ambientAudio.pause(); clearInterval(fadeOut); }
+            }, 200);
             return;
           }
         }
-        const prog = e/recoveryDuration;
-        bf = (0.6 + intensity*0.6)*((1-prog)-prog);
-        updateParticles(bf, intensity*2.0);
-        const recScale = 0.3 + 0.5*prog + intensity*0.2;
-        breathSphere.scale.set(recScale, recScale, recScale);
+
+        const recProg = elapsed / recoveryDuration;
+        breathOffset = (0.6 + intensity * 0.6) * ((1 - recProg) - recProg);
+        updateParticles(breathOffset, intensity * 2.0);
+
+        const recoveryScale = 0.3 + 0.5 * recProg + intensity * 0.2;
+        breathSphere.scale.set(recoveryScale, recoveryScale, recoveryScale);
         glowMaterial.uniforms.glowColor.value.setHex(0x00ffaa);
-        progress = prog;
+
+        breathProgress = recProg;
         statusText = `Phase: Recovery Breath<br>Take a deep breath...`;
       }
 
-      document.getElementById('breath-progress').style.width = `${progress*100}%`;
+      document.getElementById('breath-progress').style.width = `${breathProgress*100}%`;
       document.getElementById('status').innerHTML = `Cycle: ${cycleCount+1}/${maxCycles}<br>${statusText}`;
 
-      particles.rotation.z += 0.01*dt;
-      particles.rotation.y += 0.005*dt;
+      particles.rotation.z += 0.01 * delta;
+      particles.rotation.y += 0.005 * delta;
       glowMaterial.uniforms.viewVector.value = new THREE.Vector3().subVectors(camera.position, breathSphere.position);
 
       renderer.render(scene, camera);
