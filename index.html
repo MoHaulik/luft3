@@ -1,15 +1,8 @@
-Here’s the updated version of your app. I’ve:
-
-- Renamed “Natural Breathing” to “Deep Breathing” in the UI.
-- Changed the cycle so it’s now 6 sec inhale + 6 sec exhale (i.e. a 12 sec cycle).
-- Adjusted the total deep‑breathing duration to 30 cycles × 12 sec = 360 sec (6 min).
-
-```html
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Enhanced WebXR Breathing App</title>
+  <title>Simplified WebXR Breathing App</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -96,21 +89,18 @@ Here’s the updated version of your app. I’ve:
     let basePositions = [];
     let lastIntensity = 0;
 
-    // Breathing session variables
-    let phase = "breathing";
-    let phaseStartTime = 0;
-    const breathCycleDuration = 12;              // 6 sec inhale + 6 sec exhale
-    const deepBreathingDuration = 30 * 12;       // 30 cycles × 12 sec = 360 sec total
-    const holdDuration = 60;
-    const recoveryDuration = 15;
-    let cycleCount = 0;
-    const maxCycles = 3;
+    // Simplified breathing session variables
+    const sessionDuration = 180; // 3 minutes in seconds
+    const inhaleDuration = 3;    // 3 seconds inhale
+    const inhaleHoldDuration = 2; // 2 seconds rest after inhale
+    const exhaleDuration = 5;    // 5 seconds exhale
+    const exhaleHoldDuration = 2; // 2 seconds rest after exhale
+    const cycleDuration = inhaleDuration + inhaleHoldDuration + exhaleDuration + exhaleHoldDuration; // 12 seconds total cycle
+    
+    let sessionStartTime = 0;
+    let backgroundAudio;
+    let currentBreathStage = "inhale";
 
-    // Audio objects
-    let inhaleAudio, exhaleAudio, ambientAudio;
-    let lastBreathStage = null;
-
-    // Particle system settings
     const particleCount = 1500;
     const particleRadius = 5;
     let particleSystem = {
@@ -133,7 +123,6 @@ Here’s the updated version of your app. I’ve:
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       document.body.appendChild(renderer.domElement);
 
-      // Lighting
       const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
       scene.add(ambientLight);
 
@@ -144,7 +133,7 @@ Here’s the updated version of your app. I’ve:
 
       document.getElementById('start-button').addEventListener('click', () => {
         if (navigator.xr) {
-          navigator.xr.isSessionSupported('immersive-ar').then(supported => {
+          navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
             if (supported) {
               const sessionInit = { 
                 optionalFeatures: ['dom-overlay', 'light-estimation'], 
@@ -168,20 +157,16 @@ Here’s the updated version of your app. I’ve:
       document.getElementById('status').style.display = 'block';
       document.getElementById('breath-indicator').style.display = 'block';
 
-      phase = "breathing";
-      phaseStartTime = clock.getElapsedTime();
-
-      inhaleAudio = new Audio('inhale.mp3');
-      exhaleAudio = new Audio('exhale.mp3');
+      sessionStartTime = clock.getElapsedTime();
       
-      ambientAudio = new Audio('https://soundbible.com/mp3/ocean-waves-daniel_simon.mp3');
-      ambientAudio.loop = true;
-      ambientAudio.volume = 0.3;
-      ambientAudio.play();
+      backgroundAudio = new Audio('background.mp3');
+      backgroundAudio.loop = true;
+      backgroundAudio.volume = 0.5;
+      backgroundAudio.play();
 
       renderer.setAnimationLoop(render);
 
-      navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(stream => {
+      navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then((stream) => {
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const source = audioContext.createMediaStreamSource(stream);
         analyser = audioContext.createAnalyser();
@@ -240,7 +225,6 @@ Here’s the updated version of your app. I’ve:
         blending: THREE.AdditiveBlending,
         transparent: true
       });
-      
       const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
       glowMesh.position.set(0, 0, -3);
       scene.add(glowMesh);
@@ -254,15 +238,19 @@ Here’s the updated version of your app. I’ve:
         const theta = Math.random() * Math.PI * 2;
         const phi = Math.acos(2 * Math.random() - 1);
         const radius = Math.pow(Math.random(), 0.7) * particleRadius;
+        
         const x = radius * Math.sin(phi) * Math.cos(theta);
         const y = radius * Math.sin(phi) * Math.sin(theta);
         const z = radius * Math.cos(phi) * 0.7;
+        
         positions.push(x, y, z);
         basePositions.push(z);
 
-        const color = new THREE.Color();
+        let color = new THREE.Color();
         const hue = particleSystem.hueRange[0] + Math.random() * (particleSystem.hueRange[1] - particleSystem.hueRange[0]);
-        color.setHSL(hue/360, particleSystem.baseSaturation + Math.random()*0.3, 0.5 + Math.random()*0.5);
+        const saturation = particleSystem.baseSaturation + Math.random() * 0.3;
+        const lightness = 0.5 + Math.random() * 0.5;
+        color.setHSL(hue / 360, saturation, lightness);
         colors.push(color.r, color.g, color.b);
 
         sizes.push(particleSystem.baseSize * (0.5 + Math.random()));
@@ -300,25 +288,26 @@ Here’s the updated version of your app. I’ve:
           void main() {
             vColor = customColor;
             vec3 pos = position;
-            float dist = length(position.xy);
-            float breathEffect = breathFactor * (1.0 - dist/5.0) * 1.5;
+            float distFromCenter = length(position.xy);
+            float breathEffect = breathFactor * (1.0 - distFromCenter / 5.0) * 1.5;
             pos.z += breathEffect;
-            pos.x += position.x * breathFactor * 0.2;
-            pos.y += position.y * breathFactor * 0.2;
+            float radialFactor = breathFactor * 0.2;
+            pos.x += position.x * radialFactor;
+            pos.y += position.y * radialFactor;
             
             float turbAmt = turbulence * 0.3;
             pos.x += sin(time * (0.5 + turbulence) + position.z * 2.0) * turbAmt;
             pos.y += cos(time * (0.7 + turbulence) + position.x * 2.0) * turbAmt;
             pos.z += sin(time * (0.9 + turbulence) + position.y * 2.0) * turbAmt * 0.5;
-
-            if(dist < 3.0) {
-              pos.z += intensityFactor * sin(time*2.0 + dist*3.0) * (3.0-dist) * 0.3;
+            
+            if (distFromCenter < 3.0) {
+              pos.z += intensityFactor * sin(time * 2.0 + distFromCenter * 3.0) * (3.0 - distFromCenter) * 0.3;
             }
-
-            vAlpha = alpha * (1.0 - length(position)/5.0) * (0.6 + 0.4 * intensityFactor);
+            
+            vAlpha = alpha * (1.0 - length(position) / 5.0) * (0.6 + 0.4 * intensityFactor);
             float sizeBoost = 1.0 + intensityFactor * 3.0 * sizeMultiplier;
             float dynamicSize = size * sizeBoost;
-
+            
             vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
             gl_PointSize = dynamicSize * (300.0 / -mvPosition.z);
             gl_Position = projectionMatrix * mvPosition;
@@ -328,6 +317,7 @@ Here’s the updated version of your app. I’ve:
           uniform sampler2D pointTexture;
           varying vec3 vColor;
           varying float vAlpha;
+          
           void main() {
             vec4 texColor = texture2D(pointTexture, gl_PointCoord);
             gl_FragColor = vec4(vColor, vAlpha * texColor.a);
@@ -355,105 +345,111 @@ Here’s the updated version of your app. I’ve:
       const delta = clock.getDelta();
       const currentTime = clock.getElapsedTime();
       let intensity = 0;
-
+      
       if (analyser) {
         analyser.getByteFrequencyData(dataArray);
-        let relevant = 0, total = 0;
+        let relevantFreqs = 0, totalRelevant = 0;
         for (let i = 2; i < 20; i++) {
-          relevant += dataArray[i] * 1.5;
-          total++;
+          relevantFreqs += dataArray[i] * 1.5;
+          totalRelevant++;
         }
-        intensity = Math.min(1.0, (relevant/total)/128);
+        intensity = Math.min(1.0, (relevantFreqs / totalRelevant) / 128);
         intensity = Math.pow(intensity, 0.7);
       }
 
-      let statusText = "";
-      let breathOffset = 0;
-      let breathProgress = 0;
-
-      if (phase === "breathing") {
-        const elapsed = currentTime - phaseStartTime;
-        if (elapsed >= deepBreathingDuration) {
-          phase = "hold";
-          phaseStartTime = currentTime;
-        } else {
-          breathProgress = (elapsed % breathCycleDuration) / breathCycleDuration;
-          const currentStage = (breathProgress < 0.5) ? "inhale" : "exhale";
-
-          if (currentStage !== lastBreathStage) {
-            lastBreathStage = currentStage;
-            if (currentStage === "inhale") inhaleAudio.play();
-            else exhaleAudio.play();
-          }
-
-          breathOffset = (0.7 + intensity * 0.5) * Math.sin(2 * Math.PI * (breathProgress - 0.25));
-          updateParticles(breathOffset, intensity);
-
-          const sphereScale = 0.5 + 0.4 * (1 + breathOffset);
-          breathSphere.scale.set(sphereScale, sphereScale, sphereScale);
-
-          glowMaterial.uniforms.glowColor.value.setHex(
-            currentStage === "inhale" ? 0x00a1ff : 0x4876ff
-          );
-
-          const minsRem = Math.floor((deepBreathingDuration - elapsed) / 60);
-          const secsRem = Math.floor((deepBreathingDuration - elapsed) % 60);
-          statusText = `Phase: Deep Breathing<br>Remaining: ${minsRem}:${secsRem < 10 ? '0' : ''}${secsRem}`;
-        }
-      } else if (phase === "hold") {
-        const elapsed = currentTime - phaseStartTime;
-        if (elapsed >= holdDuration) {
-          phase = "recovery";
-          phaseStartTime = currentTime;
-        }
-        breathOffset = (0.2 + intensity * 0.2) * Math.sin(2 * Math.PI * (elapsed / 60));
-        updateParticles(breathOffset, intensity * 0.8);
-
-        const holdPulse = 0.2 + 0.05 * Math.sin(elapsed * 0.5) + intensity * 0.1;
-        breathSphere.scale.set(holdPulse, holdPulse, holdPulse);
-        glowMaterial.uniforms.glowColor.value.setHex(0x8a2be2);
-
-        breathProgress = elapsed / holdDuration;
-        const secRem = Math.floor(holdDuration - elapsed);
-        statusText = `Phase: Breath Hold<br>Remaining: ${secRem}s`;
-      } else if (phase === "recovery") {
-        const elapsed = currentTime - phaseStartTime;
-        if (elapsed >= recoveryDuration) {
-          cycleCount++;
-          if (cycleCount < maxCycles) {
-            phase = "breathing";
-            phaseStartTime = currentTime;
-          } else {
-            renderer.setAnimationLoop(null);
-            document.getElementById('status').innerHTML = "Session Finished!<br>Thank you for participating.";
-            document.getElementById('breath-indicator').style.display = 'none';
-            const fadeOut = setInterval(() => {
-              if (ambientAudio.volume > 0.05) ambientAudio.volume -= 0.05;
-              else { ambientAudio.pause(); clearInterval(fadeOut); }
-            }, 200);
-            return;
-          }
-        }
-
-        const recProg = elapsed / recoveryDuration;
-        breathOffset = (0.6 + intensity * 0.6) * ((1 - recProg) - recProg);
-        updateParticles(breathOffset, intensity * 2.0);
-
-        const recoveryScale = 0.3 + 0.5 * recProg + intensity * 0.2;
-        breathSphere.scale.set(recoveryScale, recoveryScale, recoveryScale);
-        glowMaterial.uniforms.glowColor.value.setHex(0x00ffaa);
-
-        breathProgress = recProg;
-        statusText = `Phase: Recovery Breath<br>Take a deep breath...`;
+      const elapsed = currentTime - sessionStartTime;
+      
+      // Check if session is complete (3 minutes)
+      if (elapsed >= sessionDuration) {
+        renderer.setAnimationLoop(null);
+        document.getElementById('status').innerHTML = "Session Finished!<br>Thank you for participating.";
+        document.getElementById('breath-indicator').style.display = 'none';
+        const fadeOut = setInterval(() => {
+          if (backgroundAudio.volume > 0.05) backgroundAudio.volume -= 0.05;
+          else { backgroundAudio.pause(); clearInterval(fadeOut); }
+        }, 200);
+        return;
       }
-
-      document.getElementById('breath-progress').style.width = `${breathProgress*100}%`;
-      document.getElementById('status').innerHTML = `Cycle: ${cycleCount+1}/${maxCycles}<br>${statusText}`;
-
+      
+      // Calculate current position within breath cycle
+      const cycleElapsed = elapsed % cycleDuration;
+      let breathStage = "";
+      let stageElapsed = 0;
+      let stageProgress = 0;
+      let breathOffset = 0;
+      
+      // Determine current breath stage
+      if (cycleElapsed < inhaleDuration) {
+        // Inhale phase
+        breathStage = "inhale";
+        stageElapsed = cycleElapsed;
+        stageProgress = stageElapsed / inhaleDuration;
+        // Gradually increase for inhale (0 to 1)
+        breathOffset = stageProgress;
+      } else if (cycleElapsed < inhaleDuration + inhaleHoldDuration) {
+        // Hold after inhale
+        breathStage = "inhale-hold";
+        stageElapsed = cycleElapsed - inhaleDuration;
+        stageProgress = stageElapsed / inhaleHoldDuration;
+        // Stay expanded during hold (1)
+        breathOffset = 1.0;
+      } else if (cycleElapsed < inhaleDuration + inhaleHoldDuration + exhaleDuration) {
+        // Exhale phase
+        breathStage = "exhale";
+        stageElapsed = cycleElapsed - (inhaleDuration + inhaleHoldDuration);
+        stageProgress = stageElapsed / exhaleDuration;
+        // Gradually decrease for exhale (1 to 0)
+        breathOffset = 1.0 - stageProgress;
+      } else {
+        // Hold after exhale
+        breathStage = "exhale-hold";
+        stageElapsed = cycleElapsed - (inhaleDuration + inhaleHoldDuration + exhaleDuration);
+        stageProgress = stageElapsed / exhaleHoldDuration;
+        // Stay contracted during hold (0)
+        breathOffset = 0.0;
+      }
+      
+      // Apply breath effect to particles
+      updateParticles(breathOffset, intensity);
+      
+      // Update sphere size based on breath
+      const sphereScale = 0.5 + 0.3 * breathOffset;
+      breathSphere.scale.set(sphereScale, sphereScale, sphereScale);
+      
+      // Update glow color based on breath stage
+      if (breathStage === "inhale") {
+        glowMaterial.uniforms.glowColor.value.setHex(0x00a1ff); // Blue for inhale
+      } else if (breathStage === "exhale") {
+        glowMaterial.uniforms.glowColor.value.setHex(0x4876ff); // Darker blue for exhale
+      } else if (breathStage === "inhale-hold") {
+        glowMaterial.uniforms.glowColor.value.setHex(0x00ffff); // Cyan for inhale hold
+      } else if (breathStage === "exhale-hold") {
+        glowMaterial.uniforms.glowColor.value.setHex(0x0066cc); // Dark blue for exhale hold
+      }
+      
+      // Update progress bar - show overall cycle progress
+      const cycleProgress = cycleElapsed / cycleDuration;
+      document.getElementById('breath-progress').style.width = `${cycleProgress * 100}%`;
+      
+      // Update status text
+      const minutesRemaining = Math.floor((sessionDuration - elapsed) / 60);
+      const secondsRemaining = Math.floor((sessionDuration - elapsed) % 60);
+      let stageText = "";
+      switch (breathStage) {
+        case "inhale": stageText = "Inhale"; break;
+        case "inhale-hold": stageText = "Hold"; break;
+        case "exhale": stageText = "Exhale"; break;
+        case "exhale-hold": stageText = "Rest"; break;
+      }
+      document.getElementById('status').innerHTML = `${stageText}<br>Remaining: ${minutesRemaining}:${secondsRemaining < 10 ? '0' : ''}${secondsRemaining}`;
+      
+      // Rotate particles slightly
       particles.rotation.z += 0.01 * delta;
       particles.rotation.y += 0.005 * delta;
+      
+      // Update view vector for glow effect
       glowMaterial.uniforms.viewVector.value = new THREE.Vector3().subVectors(camera.position, breathSphere.position);
-
+      
       renderer.render(scene, camera);
     }
   </script>
