@@ -30,97 +30,94 @@
 
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.150.1/build/three.module.js';
-    import { ARButton } from 'https://unpkg.com/three@0.150.1/examples/jsm/webxr/ARButton.js';
 
+    /* ---------- globals ---------- */
     let camera, scene, renderer;
     let analyser, dataArray;
     let particles, particleMaterial;
     let breathSphere, glowMaterial;
     const clock = new THREE.Clock();
     let lastIntensity = 0;
-
-    /* ------- breathing-session constants ------- */
-    const sessionDuration     = 180;
-    const inhaleDuration      = 3;
-    const inhaleHoldDuration  = 2;
-    const exhaleDuration      = 5;
-    const exhaleHoldDuration  = 2;
-    const cycleDuration =
-      inhaleDuration + inhaleHoldDuration + exhaleDuration + exhaleHoldDuration;
-
     let sessionStartTime = 0;
-    let backgroundAudio;          /* <-- global handle */
+    let backgroundAudio;                 // <-- handle to our track
+
+    /* ---------- breathing constants ---------- */
+    const sessionDuration    = 180;
+    const inhaleDuration     = 3;
+    const inhaleHoldDuration = 2;
+    const exhaleDuration     = 5;
+    const exhaleHoldDuration = 2;
+    const cycleDuration = inhaleDuration + inhaleHoldDuration +
+                           exhaleDuration + exhaleHoldDuration;
+
+    /* ---------- particle constants ---------- */
     const particleCount = 1500, particleRadius = 5;
     const particleSystem = { hueRange:[190,260], baseSaturation:.7, baseSize:.3 };
 
     init();
 
-    /* ------------------------------------------------------------------------- */
+    /* ======================================================================= */
     function init(){
-      scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, .01, 50);
-
-      renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+      scene   = new THREE.Scene();
+      camera  = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, .01, 50);
+      renderer= new THREE.WebGLRenderer({antialias:true, alpha:true});
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.xr.enabled = true;
       renderer.setClearColor(0x000000,0);
       document.body.appendChild(renderer.domElement);
 
       scene.add(new THREE.AmbientLight(0x404040,1.5));
-      const dirLight = new THREE.DirectionalLight(0xffffff,1);
-      dirLight.position.set(1,1,1); scene.add(dirLight);
+      const dl = new THREE.DirectionalLight(0xffffff,1); dl.position.set(1,1,1); scene.add(dl);
 
-      /* ---------------- click handler ---------------- */
-      document.getElementById('start-button').addEventListener('click', () => {
-
-        /* unlock & start audio **first thing inside the gesture** */
-        if(!backgroundAudio){
-          backgroundAudio = new Audio('background.mp3');
-          backgroundAudio.loop = true;
-          backgroundAudio.volume = 0.5;
-          backgroundAudio.play().catch(e => console.warn('Audio play blocked:', e));
-        }
-
-        /* everything else can stay the same */
-        if(!navigator.xr){
-          alert('WebXR is not supported in this browser.');
-          return;
-        }
-
-        navigator.xr.isSessionSupported('immersive-ar').then(supported => {
-          if(!supported){
-            alert('WebXR AR session is not supported on this device.');
-            return;
-          }
-          const sessionInit = {
-            optionalFeatures:['dom-overlay','light-estimation'],
-            domOverlay:{ root:document.body }
-          };
-          navigator.xr.requestSession('immersive-ar', sessionInit)
-                      .then(onSessionStarted);
-        });
-      });
+      document.getElementById('start-button').addEventListener('click', startXR);
     }
 
-    /* ------------------------------------------------------------------------- */
+    /* ======================  Start XR  (click handler) ====================== */
+    async function startXR(){
+      /* 1. unlock & play the audio *before* any await */
+      if(!backgroundAudio){
+        backgroundAudio = new Audio('background.mp3');
+        backgroundAudio.loop   = true;
+        backgroundAudio.volume = 0.5;
+        try{ await backgroundAudio.play(); }catch(e){ console.warn(e); }
+      }
+
+      /* 2. request XR session */
+      if(!navigator.xr){ alert('WebXR not supported'); return; }
+      const supported = await navigator.xr.isSessionSupported('immersive-ar');
+      if(!supported){ alert('AR session not supported'); return; }
+
+      const session = await navigator.xr.requestSession('immersive-ar',{
+        optionalFeatures:['dom-overlay','light-estimation'],
+        domOverlay:{ root:document.body }
+      });
+
+      /* 3. Safari/visionOS workaround: replay once camera is granted */
+      session.addEventListener('visibilitychange', () => {
+        backgroundAudio.play().catch(()=>{});
+      });
+
+      onSessionStarted(session);
+    }
+
+    /* ==========================  onSessionStarted  ========================= */
     function onSessionStarted(session){
       renderer.xr.setReferenceSpaceType('local');
       renderer.xr.setSession(session);
+
       document.getElementById('start-button').style.display='none';
       document.getElementById('status').style.display='block';
       document.getElementById('breath-indicator').style.display='block';
 
       sessionStartTime = clock.getElapsedTime();
-
-      /* (audio already playing, so removed duplicate create/play lines) */
-
       renderer.setAnimationLoop(render);
 
+      /* --- microphone for particle intensity --- */
       navigator.mediaDevices.getUserMedia({audio:true,video:false}).then(stream=>{
-        const audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-        const src = audioCtx.createMediaStreamSource(stream);
-        analyser = audioCtx.createAnalyser(); analyser.fftSize = 256; analyser.smoothingTimeConstant = .6;
-        dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const ctx  = new (window.AudioContext||window.webkitAudioContext)();
+        const src  = ctx.createMediaStreamSource(stream);
+        analyser   = ctx.createAnalyser(); analyser.fftSize = 256; analyser.smoothingTimeConstant=.6;
+        dataArray  = new Uint8Array(analyser.frequencyBinCount);
         src.connect(analyser);
       });
 
@@ -128,26 +125,26 @@
       createBreathingSphere();
     }
 
-    /* ---------- visuals setup (sphere + particles) ---------- */
+    /* ===================  Visual objects  =================== */
     function createBreathingSphere(){
       const g = new THREE.SphereGeometry(.5,32,32);
       const m = new THREE.MeshPhongMaterial({color:0x4876FF,transparent:true,opacity:.6,shininess:100});
       breathSphere = new THREE.Mesh(g,m); breathSphere.position.set(0,0,-3); scene.add(breathSphere);
 
-      const glowGeom = new THREE.SphereGeometry(.55,32,32);
+      const glowG = new THREE.SphereGeometry(.55,32,32);
       glowMaterial = new THREE.ShaderMaterial({
         uniforms:{ c:{value:.5}, p:{value:3.0},
                    glowColor:{value:new THREE.Color(0x00a1ff)},
                    viewVector:{value:camera.position}},
         vertexShader:`uniform vec3 viewVector; uniform float c; uniform float p; varying float intensity;
-          void main(){vec3 vN=normalize(normal);vec3 vE=normalize(viewVector);
-            intensity=pow(c-dot(vN,vE),p);
+          void main(){vec3 nrm=normalize(normal);vec3 view=normalize(viewVector);
+            intensity=pow(c-dot(nrm,view),p);
             gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `,
         fragmentShader:`uniform vec3 glowColor; varying float intensity;
           void main(){gl_FragColor=vec4(glowColor*intensity,1.0);} `,
         side:THREE.BackSide, transparent:true, blending:THREE.AdditiveBlending
       });
-      const glow = new THREE.Mesh(glowGeom, glowMaterial);
+      const glow = new THREE.Mesh(glowG, glowMaterial);
       glow.position.set(0,0,-3); scene.add(glow);
     }
 
@@ -155,9 +152,9 @@
       const geo = new THREE.BufferGeometry();
       const pos=[], col=[], siz=[], alp=[], turb=[], mult=[];
       for(let i=0;i<particleCount;i++){
-        const θ=Math.random()*Math.PI*2, φ=Math.acos(2*Math.random()-1);
+        const t=Math.random()*Math.PI*2, p=Math.acos(2*Math.random()-1);
         const r=Math.pow(Math.random(),.7)*particleRadius;
-        const x=r*Math.sin(φ)*Math.cos(θ), y=r*Math.sin(φ)*Math.sin(θ), z=r*Math.cos(φ)*.7;
+        const x=r*Math.sin(p)*Math.cos(t), y=r*Math.sin(p)*Math.sin(t), z=r*Math.cos(p)*.7;
         pos.push(x,y,z);
 
         const c = new THREE.Color();
@@ -170,12 +167,12 @@
         alp.push(.2+Math.random()*.8);
         turb.push(Math.random()*2);
       }
-      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
-      geo.setAttribute('customColor', new THREE.Float32BufferAttribute(col,3));
-      geo.setAttribute('size', new THREE.Float32BufferAttribute(siz,1));
-      geo.setAttribute('alpha', new THREE.Float32BufferAttribute(alp,1));
-      geo.setAttribute('turbulence', new THREE.Float32BufferAttribute(turb,1));
-      geo.setAttribute('sizeMultiplier', new THREE.Float32BufferAttribute(mult,1));
+      geo.setAttribute('position',     new THREE.Float32BufferAttribute(pos,3));
+      geo.setAttribute('customColor',  new THREE.Float32BufferAttribute(col,3));
+      geo.setAttribute('size',         new THREE.Float32BufferAttribute(siz,1));
+      geo.setAttribute('alpha',        new THREE.Float32BufferAttribute(alp,1));
+      geo.setAttribute('turbulence',   new THREE.Float32BufferAttribute(turb,1));
+      geo.setAttribute('sizeMultiplier',new THREE.Float32BufferAttribute(mult,1));
 
       particleMaterial = new THREE.ShaderMaterial({
         uniforms:{ pointTexture:{value:new THREE.TextureLoader().load('https://threejs.org/examples/textures/sprites/spark1.png')},
@@ -185,7 +182,8 @@
           void main(){vColor=customColor;vec3 p=position; float d=length(position.xy);
             p.z+=breathFactor*(1.0-d/5.0)*1.5;
             float rf=breathFactor*.2; p.x+=position.x*rf; p.y+=position.y*rf;
-            float tAmt=turbulence*.3; p.x+=sin(time*(.5+turbulence)+position.z*2.0)*tAmt;
+            float tAmt=turbulence*.3;
+            p.x+=sin(time*(.5+turbulence)+position.z*2.0)*tAmt;
             p.y+=cos(time*(.7+turbulence)+position.x*2.0)*tAmt;
             p.z+=sin(time*(.9+turbulence)+position.y*2.0)*tAmt*.5;
             if(d<3.0) p.z+=intensityFactor*sin(time*2.0+d*3.0)*(3.0-d)*.3;
@@ -194,51 +192,60 @@
             vec4 mv=modelViewMatrix*vec4(p,1.0); gl_PointSize=dyn*(300.0/-mv.z);
             gl_Position=projectionMatrix*mv;}`,
         fragmentShader:`uniform sampler2D pointTexture; varying vec3 vColor; varying float vAlpha;
-          void main(){vec4 t=texture2D(pointTexture,gl_PointCoord);
-            gl_FragColor=vec4(vColor,vAlpha*t.a); if(gl_FragColor.a<.05) discard;}`,
+          void main(){vec4 tex=texture2D(pointTexture,gl_PointCoord);
+            gl_FragColor=vec4(vColor,vAlpha*tex.a); if(gl_FragColor.a<.05) discard;}`,
         transparent:true, blending:THREE.AdditiveBlending, depthWrite:false
       });
+
       particles = new THREE.Points(geo, particleMaterial);
       particles.position.set(0,0,-3); scene.add(particles);
     }
 
-    /* ---------------------------- render loop ---------------------------- */
+    /* =========================  Render loop  ========================= */
     function render(){
-      const delta = clock.getDelta(), now = clock.getElapsedTime();
+      const delta = clock.getDelta();
+      const now   = clock.getElapsedTime();
+
+      /* mic intensity (0-1) -------------------------------------------------- */
       let micIntensity = 0;
       if(analyser){
         analyser.getByteFrequencyData(dataArray);
-        let sum=0; for(let i=2;i<20;i++) sum+=dataArray[i]*1.5;
-        micIntensity = Math.pow(Math.min(1,(sum/18)/128), .7);
+        let s=0; for(let i=2;i<20;i++) s+=dataArray[i]*1.5;
+        micIntensity = Math.pow(Math.min(1,(s/18)/128), .7);
       }
 
+      /* stop when time is up ------------------------------------------------- */
       const elapsed = now - sessionStartTime;
       if(elapsed >= sessionDuration){
         renderer.setAnimationLoop(null);
-        document.getElementById('status').innerHTML="Session Finished!<br>Thank you for participating.";
+        document.getElementById('status').innerHTML=
+          "Session Finished!<br>Thank you for participating.";
         document.getElementById('breath-indicator').style.display='none';
-        const fade=setInterval(()=>{ if(backgroundAudio.volume>0.05) backgroundAudio.volume-=0.05;
-                                     else{ backgroundAudio.pause(); clearInterval(fade);} },200);
+        const fade=setInterval(()=>{
+          if(backgroundAudio.volume>0.05) backgroundAudio.volume-=0.05;
+          else{ backgroundAudio.pause(); clearInterval(fade); }
+        },200);
         return;
       }
 
-      /* breathing cycle maths ------------------------------------------------- */
+      /* breathing cycle ------------------------------------------------------ */
       const t = elapsed % cycleDuration;
       let stage, breathOffset;
       if(t < inhaleDuration){ stage='inhale'; breathOffset=t/inhaleDuration; }
       else if(t < inhaleDuration+inhaleHoldDuration){ stage='inhale-hold'; breathOffset=1; }
       else if(t < inhaleDuration+inhaleHoldDuration+exhaleDuration){
-        stage='exhale'; breathOffset = 1 - (t-inhaleDuration-inhaleHoldDuration)/exhaleDuration;
+        stage='exhale';
+        breathOffset = 1 - (t-inhaleDuration-inhaleHoldDuration)/exhaleDuration;
       }else{ stage='exhale-hold'; breathOffset=0; }
 
-      /* update visuals ------------------------------------------------------- */
+      /* update shaders & UI -------------------------------------------------- */
       lastIntensity = lastIntensity*.7 + micIntensity*.3;
-      particleMaterial.uniforms.time.value = now;
-      particleMaterial.uniforms.breathFactor.value = breathOffset;
-      particleMaterial.uniforms.intensityFactor.value = lastIntensity;
+      particleMaterial.uniforms.time.value          = now;
+      particleMaterial.uniforms.breathFactor.value  = breathOffset;
+      particleMaterial.uniforms.intensityFactor.value= lastIntensity;
 
-      const scale = .5 + .3*breathOffset;
-      breathSphere.scale.set(scale,scale,scale);
+      const s = .5 + .3*breathOffset;
+      breathSphere.scale.set(s,s,s);
 
       glowMaterial.uniforms.glowColor.value.setHex(
         stage==='inhale'?0x00a1ff :
@@ -248,12 +255,13 @@
       document.getElementById('breath-progress').style.width =
         `${(t/cycleDuration)*100}%`;
 
-      const mins = Math.floor((sessionDuration - elapsed)/60);
-      const secs = Math.floor(sessionDuration - elapsed) % 60;
-      const stageTxt = { 'inhale':'Inhale','inhale-hold':'Hold','exhale':'Exhale','exhale-hold':'Rest' }[stage];
+      const mins = Math.floor((sessionDuration-elapsed)/60);
+      const secs = Math.floor(sessionDuration-elapsed)%60;
+      const txt  = {inhale:'Inhale','inhale-hold':'Hold',exhale:'Exhale','exhale-hold':'Rest'}[stage];
       document.getElementById('status').innerHTML =
-        `${stageTxt}<br>Remaining: ${mins}:${secs<10?'0':''}${secs}`;
+        `${txt}<br>Remaining: ${mins}:${secs<10?'0':''}${secs}`;
 
+      /* rotate particle cloud slightly */
       particles.rotation.z += .01*delta;
       particles.rotation.y += .005*delta;
       glowMaterial.uniforms.viewVector.value =
